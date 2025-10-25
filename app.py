@@ -36,7 +36,8 @@ else:  # Broker Models
     st.sidebar.header("Broker Tools")
     tool = st.sidebar.radio(
         "Select Tool:",
-        ["Margin & Leverage", "Swap/Rollover Rates", "Pip Value & Commission"]
+        ["Margin & Leverage", "Swap/Rollover Rates", "Pip Value & Commission",
+         "Net Exposure & Hedging", "Client Position Monitor", "A-Book vs B-Book"]
     )
 
 # Helper functions
@@ -734,7 +735,7 @@ else:  # section == "Broker Models"
             st.plotly_chart(fig, use_container_width=True)
 
     # Tool 3: Pip Value & Commission Calculator
-    else:  # Pip Value & Commission
+    elif tool == "Pip Value & Commission":
         st.header("Pip Value & Commission Calculator")
         st.markdown("Calculate pip values, spread costs, and broker revenue projections")
 
@@ -954,6 +955,510 @@ else:  # section == "Broker Models"
             )
 
             st.plotly_chart(fig, use_container_width=True)
+
+    # Tool 4: Net Exposure & Hedging Calculator
+    elif tool == "Net Exposure & Hedging":
+        st.header("Net Exposure & Hedging Calculator")
+        st.markdown("Calculate aggregate client positions and determine hedging requirements")
+
+        st.subheader("Enter Client Positions")
+
+        # Currency pair selection
+        currency_pair = st.selectbox(
+            "Currency Pair",
+            options=["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CHF", "NZD/USD", "USD/CAD", "EUR/GBP", "GBP/JPY", "EUR/JPY"],
+            key="exposure_pair"
+        )
+
+        num_clients = st.number_input("Number of Client Positions", min_value=1, max_value=50, value=5)
+
+        client_positions = []
+
+        for i in range(num_clients):
+            with st.expander(f"Client {i+1}", expanded=(i<3)):
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    client_id = st.text_input("Client ID", value=f"CLIENT{i+1:03d}", key=f"exp_client_{i}")
+                with col2:
+                    direction = st.selectbox("Direction", options=["Long", "Short"], key=f"exp_dir_{i}")
+                with col3:
+                    lots = st.number_input("Lots", min_value=0.01, max_value=100.0, value=1.0, step=0.01, key=f"exp_lots_{i}")
+
+                client_positions.append({
+                    "Client ID": client_id,
+                    "Direction": direction,
+                    "Lots": lots,
+                    "Signed Lots": lots if direction == "Long" else -lots
+                })
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            current_price = st.number_input(
+                "Current Market Price",
+                min_value=0.0001,
+                value=1.1000,
+                step=0.0001,
+                format="%.4f",
+                key="exposure_price"
+            )
+
+            exposure_limit = st.number_input(
+                "Broker Exposure Limit (lots)",
+                min_value=0.0,
+                value=10.0,
+                step=1.0,
+                help="Maximum net exposure broker is willing to carry"
+            )
+
+        with col2:
+            lp_spread = st.number_input(
+                "LP Spread Cost (pips)",
+                min_value=0.0,
+                value=0.5,
+                step=0.1,
+                help="Cost to hedge with liquidity provider"
+            )
+
+            pip_value_per_lot = st.number_input(
+                "Pip Value per Lot ($)",
+                min_value=0.0,
+                value=10.0,
+                step=0.1
+            )
+
+        if st.button("Calculate Net Exposure", type="primary"):
+            df = pd.DataFrame(client_positions)
+
+            # Calculate net exposure
+            total_long = df[df['Direction'] == 'Long']['Lots'].sum()
+            total_short = df[df['Direction'] == 'Short']['Lots'].sum()
+            net_exposure = total_long - total_short
+
+            # Determine hedge requirement
+            if abs(net_exposure) > exposure_limit:
+                hedge_required = abs(net_exposure) - exposure_limit
+                hedge_direction = "Sell" if net_exposure > 0 else "Buy"
+            else:
+                hedge_required = 0
+                hedge_direction = "None"
+
+            # Calculate costs
+            hedge_cost = hedge_required * lp_spread * pip_value_per_lot
+            exposure_kept = min(abs(net_exposure), exposure_limit)
+
+            # Risk calculation (if market moves 100 pips)
+            risk_per_100_pips = exposure_kept * 100 * pip_value_per_lot
+
+            st.success("### Net Exposure Analysis")
+
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                st.metric("Total Long Positions", f"{total_long:.2f} lots")
+            with col2:
+                st.metric("Total Short Positions", f"{total_short:.2f} lots")
+            with col3:
+                st.metric("Net Exposure", f"{net_exposure:+.2f} lots", delta=f"{'Long' if net_exposure > 0 else 'Short' if net_exposure < 0 else 'Neutral'}")
+            with col4:
+                exposure_pct = (abs(net_exposure) / exposure_limit * 100) if exposure_limit > 0 else 0
+                st.metric("Exposure vs Limit", f"{exposure_pct:.1f}%")
+
+            # Hedging recommendation
+            st.subheader("Hedging Recommendation")
+
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                st.metric("Hedge Required", f"{hedge_required:.2f} lots")
+            with col2:
+                st.metric("Hedge Direction", hedge_direction)
+            with col3:
+                st.metric("Hedge Cost", f"${hedge_cost:,.2f}")
+
+            if abs(net_exposure) > exposure_limit:
+                st.warning(f"⚠️ Net exposure exceeds limit! Recommend hedging {hedge_required:.2f} lots via {hedge_direction}")
+            else:
+                st.success(f"✅ Net exposure within limits. No hedge required.")
+
+            # Risk metrics
+            st.subheader("Risk Metrics")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.metric("Exposure Kept on Books", f"{exposure_kept:.2f} lots")
+            with col2:
+                st.metric("Risk per 100 pips", f"${risk_per_100_pips:,.2f}")
+
+            # Position breakdown table
+            st.subheader("Client Position Breakdown")
+            display_df = df[['Client ID', 'Direction', 'Lots']].copy()
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+            # Visualization - Long vs Short
+            fig = go.Figure()
+
+            fig.add_trace(go.Bar(
+                x=['Long Positions', 'Short Positions', 'Net Exposure', 'Exposure Limit'],
+                y=[total_long, total_short, abs(net_exposure), exposure_limit],
+                marker_color=['green', 'red', 'blue', 'orange'],
+                text=[f'{total_long:.2f}', f'{total_short:.2f}', f'{abs(net_exposure):.2f}', f'{exposure_limit:.2f}'],
+                textposition='outside'
+            ))
+
+            fig.update_layout(
+                title="Position Exposure Analysis",
+                yaxis_title="Lots",
+                showlegend=False,
+                height=400
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+    # Tool 5: Client Position Monitor Dashboard
+    elif tool == "Client Position Monitor":
+        st.header("Client Position Monitor Dashboard")
+        st.markdown("Real-time monitoring of all open client positions with risk flagging")
+
+        st.subheader("Enter Client Positions")
+
+        num_positions = st.number_input("Number of Open Positions", min_value=1, max_value=30, value=8)
+
+        positions = []
+
+        for i in range(num_positions):
+            with st.expander(f"Position {i+1}", expanded=(i<3)):
+                col1, col2, col3, col4 = st.columns(4)
+
+                with col1:
+                    client_id = st.text_input("Client ID", value=f"C{i+1:04d}", key=f"mon_client_{i}")
+                    pair = st.selectbox("Pair", options=["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CHF"], key=f"mon_pair_{i}")
+
+                with col2:
+                    direction = st.selectbox("Direction", options=["Long", "Short"], key=f"mon_dir_{i}")
+                    lots = st.number_input("Lots", min_value=0.01, value=1.0, step=0.01, key=f"mon_lots_{i}")
+
+                with col3:
+                    entry_price = st.number_input("Entry Price", min_value=0.0001, value=1.1000, step=0.0001, format="%.4f", key=f"mon_entry_{i}")
+                    current_price = st.number_input("Current Price", min_value=0.0001, value=1.1050, step=0.0001, format="%.4f", key=f"mon_curr_{i}")
+
+                with col4:
+                    equity = st.number_input("Client Equity ($)", min_value=0.0, value=10000.0, step=100.0, key=f"mon_equity_{i}")
+                    duration_hours = st.number_input("Duration (hours)", min_value=0, value=24, key=f"mon_dur_{i}")
+
+                # Calculate P&L
+                pip_movement = (current_price - entry_price) * 10000 if "JPY" not in pair else (current_price - entry_price) * 100
+                if direction == "Short":
+                    pip_movement = -pip_movement
+
+                pip_value = 10 if "JPY" not in pair else (10 / current_price * 100)
+                pnl = pip_movement * pip_value * lots
+
+                # Calculate margin level (simplified)
+                margin_used = (lots * 100000 * entry_price) / 100  # Assuming 100:1 leverage
+                margin_level = (equity / margin_used * 100) if margin_used > 0 else 0
+
+                positions.append({
+                    "Client ID": client_id,
+                    "Pair": pair,
+                    "Direction": direction,
+                    "Lots": lots,
+                    "Entry": entry_price,
+                    "Current": current_price,
+                    "Pips": pip_movement,
+                    "P&L": pnl,
+                    "Equity": equity,
+                    "Margin Level": margin_level,
+                    "Duration (hrs)": duration_hours
+                })
+
+        if st.button("Analyze Positions", type="primary"):
+            df = pd.DataFrame(positions)
+
+            # Calculate aggregate metrics
+            total_pnl = df['P&L'].sum()
+            winning_positions = len(df[df['P&L'] > 0])
+            losing_positions = len(df[df['P&L'] < 0])
+            positions_at_risk = len(df[df['Margin Level'] < 150])
+
+            st.success("### Position Summary")
+
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                st.metric("Total Open Positions", len(df))
+            with col2:
+                st.metric("Aggregate Client P&L", f"${total_pnl:,.2f}")
+            with col3:
+                st.metric("Winning Positions", winning_positions)
+            with col4:
+                st.metric("At Risk (ML < 150%)", positions_at_risk)
+
+            # Risk flagging
+            st.subheader("Risk Alerts")
+
+            # Flag positions near margin call
+            margin_call_positions = df[df['Margin Level'] < 150]
+            if len(margin_call_positions) > 0:
+                st.warning(f"⚠️ {len(margin_call_positions)} position(s) approaching margin call threshold")
+                for idx, row in margin_call_positions.iterrows():
+                    st.error(f"🚨 {row['Client ID']} - {row['Pair']} - Margin Level: {row['Margin Level']:.1f}%")
+            else:
+                st.success("✅ All positions have healthy margin levels")
+
+            # Flag large positions
+            large_positions = df[df['Lots'] > 5]
+            if len(large_positions) > 0:
+                st.info(f"ℹ️ {len(large_positions)} large position(s) detected (>5 lots)")
+
+            # Full position table
+            st.subheader("All Open Positions")
+
+            # Format display dataframe
+            display_df = df.copy()
+            display_df['P&L'] = display_df['P&L'].apply(lambda x: f"${x:,.2f}")
+            display_df['Equity'] = display_df['Equity'].apply(lambda x: f"${x:,.0f}")
+            display_df['Margin Level'] = display_df['Margin Level'].apply(lambda x: f"{x:.1f}%")
+            display_df['Pips'] = display_df['Pips'].apply(lambda x: f"{x:+.1f}")
+
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+            # Visualization - P&L by client
+            fig = go.Figure()
+
+            colors = ['green' if pnl > 0 else 'red' for pnl in df['P&L']]
+
+            fig.add_trace(go.Bar(
+                x=df['Client ID'],
+                y=df['P&L'],
+                marker_color=colors,
+                text=[f'${pnl:,.0f}' for pnl in df['P&L']],
+                textposition='outside'
+            ))
+
+            fig.update_layout(
+                title="Client P&L Overview",
+                xaxis_title="Client ID",
+                yaxis_title="P&L ($)",
+                showlegend=False,
+                height=400
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Pair concentration
+            st.subheader("Position Concentration by Pair")
+            pair_summary = df.groupby('Pair')['Lots'].sum().reset_index()
+            pair_summary.columns = ['Currency Pair', 'Total Lots']
+
+            fig2 = px.pie(pair_summary, values='Total Lots', names='Currency Pair', title='Position Distribution by Pair')
+            st.plotly_chart(fig2, use_container_width=True)
+
+    # Tool 6: A-Book vs B-Book Decision Tool
+    else:  # A-Book vs B-Book
+        st.header("A-Book vs B-Book Decision Tool")
+        st.markdown("Analyze client profitability and determine optimal booking strategy")
+
+        st.subheader("Enter Client Trading History")
+
+        num_clients = st.number_input("Number of Clients to Analyze", min_value=1, max_value=20, value=6)
+
+        clients = []
+
+        for i in range(num_clients):
+            with st.expander(f"Client {i+1}", expanded=(i<3)):
+                col1, col2, col3 = st.columns(3)
+
+                with col1:
+                    client_id = st.text_input("Client ID", value=f"CLIENT{i+1:03d}", key=f"ab_client_{i}")
+                    total_trades = st.number_input("Total Trades (30 days)", min_value=1, value=50, key=f"ab_trades_{i}")
+                    winning_trades = st.number_input("Winning Trades", min_value=0, value=25, key=f"ab_wins_{i}")
+
+                with col2:
+                    avg_trade_size = st.number_input("Avg Trade Size (lots)", min_value=0.01, value=1.0, step=0.01, key=f"ab_size_{i}")
+                    total_volume = st.number_input("Total Volume (lots)", min_value=0.0, value=50.0, step=1.0, key=f"ab_vol_{i}")
+                    avg_hold_time = st.number_input("Avg Hold Time (hours)", min_value=0.1, value=24.0, step=0.1, key=f"ab_hold_{i}")
+
+                with col3:
+                    gross_pnl = st.number_input("Client Gross P&L ($)", value=1000.0, step=100.0, key=f"ab_pnl_{i}")
+                    commission_paid = st.number_input("Commission Paid ($)", min_value=0.0, value=350.0, step=10.0, key=f"ab_comm_{i}")
+
+                # Calculate metrics
+                win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+                losing_trades = total_trades - winning_trades
+                profit_factor = abs(gross_pnl / (commission_paid + 1)) if commission_paid > 0 else 0
+
+                # Determine if toxic flow
+                is_toxic = win_rate > 60 or avg_trade_size > 5 or avg_hold_time < 2
+                is_profitable_to_broker = gross_pnl < 0  # Client is losing
+
+                clients.append({
+                    "Client ID": client_id,
+                    "Total Trades": total_trades,
+                    "Win Rate": win_rate,
+                    "Avg Trade Size": avg_trade_size,
+                    "Total Volume": total_volume,
+                    "Avg Hold Time": avg_hold_time,
+                    "Client P&L": gross_pnl,
+                    "Commission Revenue": commission_paid,
+                    "Toxic Flow": is_toxic,
+                    "Profitable to Broker": is_profitable_to_broker
+                })
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            lp_commission_cost = st.number_input(
+                "LP Commission Cost per Lot ($)",
+                min_value=0.0,
+                value=5.0,
+                step=0.5,
+                help="Cost to send trades to liquidity provider (A-Book)"
+            )
+
+        with col2:
+            risk_tolerance = st.selectbox(
+                "Broker Risk Tolerance",
+                options=["Conservative", "Moderate", "Aggressive"],
+                help="How much risk willing to take on B-Book positions"
+            )
+
+        if st.button("Analyze Clients & Generate Recommendations", type="primary"):
+            df = pd.DataFrame(clients)
+
+            # Calculate net broker revenue for each scenario
+            df['A-Book Revenue'] = df['Commission Revenue'] - (df['Total Volume'] * lp_commission_cost)
+            df['B-Book Revenue'] = df['Commission Revenue'] - df['Client P&L']  # Broker takes opposite side
+
+            # Determine recommendation
+            recommendations = []
+            for idx, row in df.iterrows():
+                if row['Toxic Flow']:
+                    # Toxic flow should be A-Booked to avoid risk
+                    recommendation = "A-Book"
+                    reason = "Toxic flow - hedge with LP"
+                elif row['Win Rate'] < 45:
+                    # Losing clients can be B-Booked
+                    if risk_tolerance in ["Moderate", "Aggressive"]:
+                        recommendation = "B-Book"
+                        reason = "Profitable client pattern"
+                    else:
+                        recommendation = "A-Book"
+                        reason = "Conservative policy"
+                elif row['Avg Trade Size'] > 5:
+                    # Large positions should be hedged
+                    recommendation = "A-Book"
+                    reason = "Large position size risk"
+                else:
+                    # Default based on profitability
+                    if row['B-Book Revenue'] > row['A-Book Revenue'] and not row['Toxic Flow']:
+                        recommendation = "B-Book" if risk_tolerance != "Conservative" else "Hybrid"
+                        reason = "More profitable to internalize"
+                    else:
+                        recommendation = "A-Book"
+                        reason = "Better A-Book economics"
+
+                recommendations.append(recommendation)
+
+            df['Recommendation'] = recommendations
+
+            # Summary metrics
+            total_abook = len(df[df['Recommendation'] == 'A-Book'])
+            total_bbook = len(df[df['Recommendation'] == 'B-Book'])
+            total_hybrid = len(df[df['Recommendation'] == 'Hybrid'])
+
+            total_abook_revenue = df[df['Recommendation'] == 'A-Book']['A-Book Revenue'].sum()
+            total_bbook_revenue = df[df['Recommendation'] == 'B-Book']['B-Book Revenue'].sum()
+            total_revenue = total_abook_revenue + total_bbook_revenue
+
+            st.success("### Booking Strategy Recommendations")
+
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                st.metric("A-Book Clients", total_abook)
+            with col2:
+                st.metric("B-Book Clients", total_bbook)
+            with col3:
+                st.metric("Hybrid Clients", total_hybrid)
+            with col4:
+                st.metric("Projected Revenue", f"${total_revenue:,.2f}")
+
+            # Revenue breakdown
+            st.subheader("Revenue Analysis")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.metric("A-Book Revenue", f"${total_abook_revenue:,.2f}")
+            with col2:
+                st.metric("B-Book Revenue", f"${total_bbook_revenue:,.2f}")
+
+            # Client recommendations table
+            st.subheader("Client-by-Client Recommendations")
+
+            display_df = df[[
+                'Client ID', 'Win Rate', 'Avg Trade Size', 'Total Volume',
+                'Client P&L', 'Commission Revenue', 'Toxic Flow', 'Recommendation'
+            ]].copy()
+
+            display_df['Win Rate'] = display_df['Win Rate'].apply(lambda x: f"{x:.1f}%")
+            display_df['Client P&L'] = display_df['Client P&L'].apply(lambda x: f"${x:,.0f}")
+            display_df['Commission Revenue'] = display_df['Commission Revenue'].apply(lambda x: f"${x:,.0f}")
+            display_df['Toxic Flow'] = display_df['Toxic Flow'].apply(lambda x: "⚠️ Yes" if x else "No")
+
+            # Color code recommendations
+            def highlight_recommendation(val):
+                if val == 'A-Book':
+                    return 'background-color: lightblue'
+                elif val == 'B-Book':
+                    return 'background-color: lightgreen'
+                else:
+                    return 'background-color: lightyellow'
+
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+            # Visualization - Client categorization
+            st.subheader("Client Categorization")
+
+            fig = go.Figure()
+
+            fig.add_trace(go.Scatter(
+                x=df['Win Rate'],
+                y=df['Avg Trade Size'],
+                mode='markers+text',
+                marker=dict(
+                    size=df['Total Volume'] / 5,
+                    color=[{'A-Book': 'blue', 'B-Book': 'green', 'Hybrid': 'orange'}[r] for r in df['Recommendation']],
+                    showscale=False
+                ),
+                text=df['Client ID'],
+                textposition='top center'
+            ))
+
+            fig.update_layout(
+                title="Client Risk Profile (Size = Volume)",
+                xaxis_title="Win Rate (%)",
+                yaxis_title="Avg Trade Size (lots)",
+                height=500
+            )
+
+            # Add risk zones
+            fig.add_hline(y=5, line_dash="dash", line_color="red", annotation_text="Large Size Threshold")
+            fig.add_vline(x=60, line_dash="dash", line_color="red", annotation_text="High Win Rate (Toxic)")
+
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Booking strategy pie chart
+            booking_summary = df['Recommendation'].value_counts().reset_index()
+            booking_summary.columns = ['Strategy', 'Count']
+
+            fig2 = px.pie(booking_summary, values='Count', names='Strategy',
+                         title='Recommended Booking Distribution',
+                         color='Strategy',
+                         color_discrete_map={'A-Book': 'lightblue', 'B-Book': 'lightgreen', 'Hybrid': 'lightyellow'})
+            st.plotly_chart(fig2, use_container_width=True)
 
 # Footer
 st.sidebar.markdown("---")
