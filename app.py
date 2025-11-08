@@ -4,6 +4,7 @@ import numpy as np
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 import plotly.express as px
+from analytics_dashboard import render_analytics_dashboard
 
 # Page configuration
 st.set_page_config(
@@ -20,7 +21,7 @@ st.markdown("Comprehensive risk assessment tools for traders and forex broker op
 st.sidebar.header("Calculator Sections")
 section = st.sidebar.radio(
     "Select Section:",
-    ["Trader Models", "Broker Models"]
+    ["Trader Models", "Broker Models", "Product Metrics"]
 )
 
 st.sidebar.markdown("---")
@@ -32,12 +33,18 @@ if section == "Trader Models":
         "Select Tool:",
         ["Position Sizing", "Portfolio Risk", "Value at Risk (VaR)", "Risk/Reward Analysis"]
     )
-else:  # Broker Models
+elif section == "Broker Models":
     st.sidebar.header("Broker Tools")
     tool = st.sidebar.radio(
         "Select Tool:",
         ["Margin & Leverage", "Swap/Rollover Rates", "Pip Value & Commission",
          "Net Exposure & Hedging", "Client Position Monitor", "A-Book vs B-Book"]
+    )
+else:  # Product Metrics
+    st.sidebar.header("Analytics Dashboard")
+    tool = st.sidebar.radio(
+        "Select View:",
+        ["Business Metrics", "User Engagement", "Customer Success", "ROI Analysis"]
     )
 
 # Helper functions
@@ -1459,6 +1466,11 @@ else:  # section == "Broker Models"
                          color='Strategy',
                          color_discrete_map={'A-Book': 'lightblue', 'B-Book': 'lightgreen', 'Hybrid': 'lightyellow'})
             st.plotly_chart(fig2, use_container_width=True)
+
+
+# ========== PRODUCT METRICS ==========
+if section == "Product Metrics":
+    render_analytics_dashboard(tool)
 
 # Footer
 st.sidebar.markdown("---")
